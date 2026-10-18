@@ -21,7 +21,7 @@
     "@creit.tech/stellar-wallets-kit": "^2.0.1",
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react": "^1.1.9",
-    "@sentry/nextjs": "^10.68.0",
+    "@sentry/nextjs": "^11.7.0",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^14.6.1",
     "autoprefixer": "^10.4.27",
