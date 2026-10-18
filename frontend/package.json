@@ -7,10 +7,10 @@
     "npm": ">=11"
   },
   "scripts": {
-    "dev": "next dev --experimental-https",
-    "dev:http": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node init && next dev --experimental-https",
+    "dev:http": "node init && next dev",
+    "build": "node init && next build",
+    "start": "node init && next start",
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
