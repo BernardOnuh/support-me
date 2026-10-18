@@ -180,7 +180,7 @@ jobs:
       # --audit-level=high` step, which would fail on every PR today given
       # this repo's existing dependency tree (see TESTING.md).
       - name: Scan dependency changes for new vulnerabilities
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
 
