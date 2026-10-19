@@ -4,7 +4,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CreatorProfileClient from '@/app/[username]/CreatorProfileClient';
 import { useAuth } from '@/context/AuthContext';
-import { connectWallet } from '@/lib/wallet';
+import { connectWallet, isWalletOnTestnet } from '@/lib/wallet';
 
 // CreatorProfileClient unwraps the `params` prop with React's use(), which
 // suspends on an unresolved promise — App Router provides a Suspense
@@ -39,6 +39,7 @@ vi.mock('@hugeicons/core-free-icons', async () => {
 vi.mock('@/lib/wallet', () => ({
   connectWallet: vi.fn(),
   disconnectWallet: vi.fn(),
+  isWalletOnTestnet: vi.fn(),
 }));
 
 vi.mock('@/lib/notify', () => ({
@@ -151,6 +152,7 @@ class FakeLocalStorage {
 
 const mockUseAuth = vi.mocked(useAuth);
 const mockConnectWallet = vi.mocked(connectWallet);
+const mockIsWalletOnTestnet = vi.mocked(isWalletOnTestnet);
 
 const baseCreator = {
   id: 1,
@@ -197,6 +199,9 @@ function mockFetchSequence(handlers: Record<string, unknown>) {
 describe('CreatorProfileClient', () => {
   beforeEach(() => {
     mockLoadAccount.mockResolvedValue({ balances: [] });
+    // Unknown network by default: the wallet doesn't report one, so nothing
+    // is blocked (tests override this to simulate a Mainnet wallet).
+    mockIsWalletOnTestnet.mockResolvedValue(null);
     mockUseAuth.mockReturnValue({
       user: null,
       token: null,
@@ -639,6 +644,77 @@ describe('CreatorProfileClient', () => {
           /this profile and the donation form only/i
         );
       });
+    });
+  });
+
+  describe('wrong-network notice (#255)', () => {
+    const DONOR = 'GDONORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+
+    it('shows a blocking notice instead of the donate form when the wallet is on Mainnet', async () => {
+      mockFetchSequence({
+        '/api/creators/alice': baseCreator,
+        '/api/goals/alice': { items: [] },
+      });
+      mockConnectWallet.mockResolvedValue(DONOR);
+      mockIsWalletOnTestnet.mockResolvedValue(false);
+
+      await renderProfile('alice');
+      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent(/wrong network/i)
+      );
+      expect(screen.getByRole('button', { name: /check again/i })).toBeInTheDocument();
+      // The donate form stays hidden until the network is fixed.
+      expect(screen.queryByLabelText(/amount/i)).not.toBeInTheDocument();
+    });
+
+    it('clears the notice on "Check again" once the wallet is on Testnet', async () => {
+      mockFetchSequence({
+        '/api/creators/alice': baseCreator,
+        '/api/goals/alice': { items: [] },
+      });
+      mockConnectWallet.mockResolvedValue(DONOR);
+      mockIsWalletOnTestnet.mockResolvedValue(false);
+
+      await renderProfile('alice');
+      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
+      await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+
+      mockIsWalletOnTestnet.mockResolvedValue(true);
+      await userEvent.click(screen.getByRole('button', { name: /check again/i }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      );
+      expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
+    });
+
+    it('blocks a donation when the wallet switched to Mainnet after connecting', async () => {
+      mockFetchSequence({
+        '/api/creators/alice': baseCreator,
+        '/api/goals/alice': { items: [] },
+      });
+      mockConnectWallet.mockResolvedValue(DONOR);
+
+      await renderProfile('alice');
+      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
+      await waitFor(() => expect(screen.getByLabelText(/amount/i)).toBeInTheDocument());
+
+      mockIsWalletOnTestnet.mockResolvedValue(false);
+      await userEvent.click(screen.getByRole('button', { name: /send donation/i }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent(/wrong network/i)
+      );
+      // No donation was recorded — the request never went out.
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/api/donations'))
+      ).toHaveLength(0);
     });
   });
 

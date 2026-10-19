@@ -7,7 +7,7 @@ import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { notify } from '@/lib/notify';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { PartyIcon, TwitterIcon, LinkIcon } from '@hugeicons/core-free-icons';
-import { connectWallet } from '@/lib/wallet';
+import { connectWallet, isWalletOnTestnet } from '@/lib/wallet';
 import {
   categorizeWalletError,
   WALLET_INSTALL_LINKS,
@@ -127,6 +127,9 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'paused'>('connecting');
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // The connected wallet reports a network other than Testnet; the donate
+  // form is replaced with a blocking notice until it's switched.
+  const [wrongNetwork, setWrongNetwork] = useState(false);
 
   const [userAddress, setUserAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
@@ -336,6 +339,20 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
     };
   }, [userAddress, assetCode, loadAssetBalance]);
 
+  // Re-reads the wallet's current network. Returns false (and raises the
+  // blocking notice) when it provably isn't Testnet; true otherwise —
+  // including when the wallet doesn't expose its network at all, in which
+  // case there is nothing to block on.
+  const ensureTestnetWallet = async (): Promise<boolean> => {
+    const onTestnet = await isWalletOnTestnet();
+    if (onTestnet === false) {
+      setWrongNetwork(true);
+      return false;
+    }
+    setWrongNetwork(false);
+    return true;
+  };
+
   const handleConnectWallet = async () => {
     setConnecting(true);
     try {
@@ -344,6 +361,7 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
       // address is null when the user closed the wallet picker without
       // connecting (see lib/wallet.ts) -- nothing to load or celebrate yet.
       if (!address) return;
+      if (!(await ensureTestnetWallet())) return;
       setBalance(await loadAssetBalance(address, assetCode));
       notify.success(t('walletConnected'));
     } catch (err) {
@@ -377,11 +395,23 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
     }
   };
 
+  // Shown on the "Check again" button of the wrong-network notice: if the
+  // wallet has been switched to Testnet, clear the notice and refresh the
+  // balance the form will show.
+  const handleRecheckNetwork = async () => {
+    if (await ensureTestnetWallet()) {
+      if (userAddress) setBalance(await loadAssetBalance(userAddress, assetCode));
+    }
+  };
+
   const handleSendDonation = async () => {
     if (!userAddress || !creator?.walletAddress) {
       notify.error(t('cannotSendDonationTitle'), t('cannotSendDonationMessage'));
       return;
     }
+    // The user may have switched the wallet to Mainnet since connecting —
+    // check again before any transaction is built or signed.
+    if (!(await ensureTestnetWallet())) return;
 
     setSending(true);
     setTxStatus('building');
@@ -477,6 +507,11 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
         setUserAddress(address);
       }
       if (!address) {
+        setSending(false);
+        return;
+      }
+      // The wallet connected just above may itself be on the wrong network.
+      if (!(await ensureTestnetWallet())) {
         setSending(false);
         return;
       }
@@ -759,6 +794,18 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
                   {subscribeStep ?? statusLabels[txStatus as string]}
                 </p>
               )}
+            </div>
+          ) : wrongNetwork ? (
+            <div role="alert" className="card-brutal bg-brand-pink p-4 space-y-3">
+              <h3 className="font-extrabold text-ink">{t('wrongNetworkTitle')}</h3>
+              <p className="text-sm text-ink font-medium">{t('wrongNetworkMessage')}</p>
+              <button
+                type="button"
+                onClick={handleRecheckNetwork}
+                className="btn-brutal btn-brutal-primary w-full min-h-[48px]"
+              >
+                {t('wrongNetworkRecheck')}
+              </button>
             </div>
           ) : !userAddress ? (
             <button
