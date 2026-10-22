@@ -2,6 +2,12 @@
 
 This runbook documents common production failure modes for SupportMe, including detection methods and step-by-step response procedures.
 
+## Runtime
+
+CI uses Node.js 24 from the repository's `.nvmrc`. Keep the Railway backend
+service and Vercel project on Node.js 24 as well; set the runtime in each
+provider's project/service settings and verify it in the deployment logs.
+
 ## Table of Contents
 
 - [RPC Outage](#rpc-outage)
