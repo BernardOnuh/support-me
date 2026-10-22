@@ -131,6 +131,9 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Check translation message key parity
+        run: npm run check:i18n
+
       - name: Lint
         run: npm run lint
 
