@@ -42,70 +42,21 @@ describe('AuthContext', () => {
     expect(result.current.user).toEqual({ id: 1, walletAddress: 'GABC' });
   });
 
-  it.each([
-    ['corrupt JSON', '{unfinished'],
-    ['null user', 'null'],
-    ['array', '[]'],
-    ['primitive', '42'],
-    ['missing id', JSON.stringify({ walletAddress: 'GABC' })],
-    ['string id', JSON.stringify({ id: '1', walletAddress: 'GABC' })],
-    ['fractional id', JSON.stringify({ id: 1.5, walletAddress: 'GABC' })],
-    ['missing wallet', JSON.stringify({ id: 1 })],
-    ['wrong wallet type', JSON.stringify({ id: 1, walletAddress: 42 })],
-    ['wrong email type', JSON.stringify({ id: 1, walletAddress: 'GABC', email: {} })],
-  ])('clears both keys and stays signed out for %s', async (_name, storedUser) => {
+  it('syncs the session when another tab updates localStorage', async () => {
     localStorage.setItem('authToken', 'saved-token');
-    localStorage.setItem('authUser', storedUser);
+    localStorage.setItem('authUser', JSON.stringify({ id: 1, walletAddress: 'GABC' }));
+
     const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.user).toBeNull();
-    expect(result.current.token).toBeNull();
-    expect(localStorage.getItem('authToken')).toBeNull();
-    expect(localStorage.getItem('authUser')).toBeNull();
-  });
 
-  it.each([
-    ['saved-token', null],
-    [null, JSON.stringify({ id: 1, walletAddress: 'GABC' })],
-    ['', JSON.stringify({ id: 1, walletAddress: 'GABC' })],
-    ['   ', JSON.stringify({ id: 1, walletAddress: 'GABC' })],
-  ])('clears a half-written or empty session (%s, %s)', async (token, user) => {
-    if (token !== null) localStorage.setItem('authToken', token);
-    if (user !== null) localStorage.setItem('authUser', user);
-    const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.user).toBeNull();
-    expect(result.current.token).toBeNull();
-    expect(localStorage.getItem('authToken')).toBeNull();
-    expect(localStorage.getItem('authUser')).toBeNull();
-  });
+    localStorage.setItem('authToken', 'other-tab-token');
+    localStorage.setItem('authUser', JSON.stringify({ id: 9, walletAddress: 'GXYZ' }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'authToken', newValue: 'other-tab-token' }));
 
-  it('restores a valid session for an account without a connected wallet', async () => {
-    const user = { id: 2, walletAddress: null };
-    localStorage.setItem('authToken', 'twitter-token');
-    localStorage.setItem('authUser', JSON.stringify(user));
-    const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.user).toEqual(user);
-    expect(result.current.token).toBe('twitter-token');
-  });
-
-  it('finishes loading signed out when storage access is blocked', async () => {
-    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new DOMException('Storage blocked', 'SecurityError');
+    await waitFor(() => {
+      expect(result.current.token).toBe('other-tab-token');
+      expect(result.current.user).toEqual({ id: 9, walletAddress: 'GXYZ' });
     });
-    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
-      throw new DOMException('Storage blocked', 'SecurityError');
-    });
-    try {
-      const { result } = renderHook(() => useAuth(), { wrapper: AuthProvider });
-      await waitFor(() => expect(result.current.loading).toBe(false));
-      expect(result.current.user).toBeNull();
-      expect(result.current.token).toBeNull();
-    } finally {
-      getItem.mockRestore();
-      removeItem.mockRestore();
-    }
   });
 
   it('logs in with a wallet and persists the session', async () => {

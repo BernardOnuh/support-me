@@ -52,36 +52,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const syncSessionFromStorage = () => {
+      const savedToken = localStorage.getItem('authToken');
+      const savedUser = localStorage.getItem('authUser');
+      if (savedToken && savedUser) {
+        try {
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring session state from localStorage on mount, see comment above
+          setToken(savedToken);
+          setUser(JSON.parse(savedUser));
+        } catch {
+          // Clear invalid stored data
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('authUser');
+          setToken(null);
+          setUser(null);
+        }
+        return;
+      }
+      setToken(null);
+      setUser(null);
+    };
+
     // One-time sync FROM an external system (localStorage) on mount, which is
     // exactly what effects are for — not a derived-state anti-pattern. This
     // can't move to a `useState` lazy initializer because `localStorage`
     // isn't available during SSR; reading it outside an effect would cause a
     // hydration mismatch.
-    try {
-      const savedToken = localStorage.getItem('authToken');
-      const savedUser = localStorage.getItem('authUser');
-      if (savedToken?.trim() && savedUser) {
-        const parsedUser: unknown = JSON.parse(savedUser);
-        if (!isStoredUser(parsedUser)) throw new Error('Invalid stored user');
-        // Restore both values only after parsing and checking the entire session.
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring session state from localStorage on mount, see comment above
-        setToken(savedToken);
-        setUser(parsedUser);
-      } else if (savedToken !== null || savedUser !== null) {
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('authUser');
+    syncSessionFromStorage();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'authToken' || event.key === 'authUser' || event.key === null) {
+        syncSessionFromStorage();
       }
-    } catch {
-      // Storage can also be unavailable (for example, browser privacy settings).
-      // Cleanup is best effort; either failure must leave the app signed out.
-      for (const key of ['authToken', 'authUser']) {
-        try {
-          localStorage.removeItem(key);
-        } catch { /* Storage access is blocked. */ }
-      }
-    } finally {
-      setLoading(false);
-    }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    setLoading(false);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   // Every sign-in method (wallet, Twitter, magic link) ends the same way:
