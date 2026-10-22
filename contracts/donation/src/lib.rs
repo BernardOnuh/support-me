@@ -1033,15 +1033,8 @@ impl DonationContract {
         creator.require_auth();
         extend_instance_ttl(&env);
         let registry = Self::registry_address(&env);
-        let args: Vec<Val> = (creator.clone(), goal_amount).into_val(&env);
+        let args: Vec<Val> = (creator, goal_amount).into_val(&env);
         let (): () = env.invoke_contract(&registry, &Symbol::new(&env, "set_goal"), args);
-
-        GoalUpdatedEvent {
-            creator,
-            goal_amount,
-            updated_at: env.ledger().timestamp(),
-        }
-        .publish(&env);
     }
 
     /// Cross-contract call: reads a creator's funding goal from CreatorRegistry.

@@ -307,16 +307,17 @@ export class SorobanEventListener {
 
       case "goal_upd": {
         const value = decodeScVal(evt.value) as {
-          goal_amount: bigint | number;
+          goal_amount: bigint | string | number;
           updated_at: bigint | number;
         };
 
         const creatorAddress = topics[1] as string;
-        const goalAmount = Number(value.goal_amount);
+        const goalAmountBigInt = BigInt(value.goal_amount);
+        const goalAmountStr = goalAmountBigInt.toString();
 
         const payload: GoalUpdatedEvent = {
           creator: creatorAddress,
-          goalAmount: value.goal_amount.toString(),
+          goalAmount: goalAmountStr,
           updatedAt: Number(value.updated_at),
           ledger: evt.ledger,
           txHash: evt.txHash,
@@ -329,7 +330,12 @@ export class SorobanEventListener {
         try {
           await prisma.creator.updateMany({
             where: { walletAddress: creatorAddress },
-            data: { donationGoal: goalAmount },
+            data: {
+              donationGoal:
+                goalAmountBigInt <= BigInt(2147483647)
+                  ? Number(goalAmountBigInt)
+                  : 2147483647,
+            },
           });
         } catch (err) {
           console.error(
