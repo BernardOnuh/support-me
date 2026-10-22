@@ -10,6 +10,17 @@ interface User {
   email?: string | null;
 }
 
+function isStoredUser(value: unknown): value is User {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const user = value as Record<string, unknown>;
+  return (
+    typeof user.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0 &&
+    // Twitter and magic-link accounts legitimately have no wallet yet.
+    (typeof user.walletAddress === 'string' || user.walletAddress === null) &&
+    (user.email === undefined || user.email === null || typeof user.email === 'string')
+  );
+}
+
 interface LoginResult {
   user: User;
   token: string;

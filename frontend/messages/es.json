@@ -30,6 +30,7 @@
     "testnetBadge": "Testnet",
     "testnetTooltip": "Esta aplicación funciona en la Testnet de Stellar; no se usan fondos reales.",
     "connectWallet": "Conectar billetera",
+    "payoutUnavailable": "Este creador aún no acepta propinas porque no ha conectado una billetera para recibir pagos. Vuelve más tarde.",
     "connecting": "Conectando…",
     "walletConnected": "¡Billetera conectada!",
     "walletLabel": "Billetera: {address}…",

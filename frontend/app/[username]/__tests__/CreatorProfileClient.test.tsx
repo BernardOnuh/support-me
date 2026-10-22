@@ -217,6 +217,17 @@ describe('CreatorProfileClient', () => {
     vi.clearAllMocks();
   });
 
+  it('explains why tips are unavailable before asking the supporter to connect', async () => {
+    mockFetchSequence({
+      '/api/creators/alice': { ...baseCreator, walletAddress: null },
+      '/api/goals/alice': { items: [] },
+    });
+    await renderProfile('alice');
+    await waitFor(() => expect(screen.getByText(/not accepting tips yet/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Connect Wallet' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send Donation' })).not.toBeInTheDocument();
+  });
+
   it('renders a progress bar for every active goal, using server-computed totals', async () => {
     mockFetchSequence({
       '/api/creators/alice': baseCreator,
