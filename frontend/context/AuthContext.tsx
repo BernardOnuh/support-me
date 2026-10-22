@@ -10,6 +10,17 @@ interface User {
   email?: string | null;
 }
 
+function isStoredUser(value: unknown): value is User {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const user = value as Record<string, unknown>;
+  return (
+    typeof user.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0 &&
+    // Twitter and magic-link accounts legitimately have no wallet yet.
+    (typeof user.walletAddress === 'string' || user.walletAddress === null) &&
+    (user.email === undefined || user.email === null || typeof user.email === 'string')
+  );
+}
+
 interface LoginResult {
   user: User;
   token: string;
@@ -46,20 +57,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // can't move to a `useState` lazy initializer because `localStorage`
     // isn't available during SSR; reading it outside an effect would cause a
     // hydration mismatch.
-    const savedToken = localStorage.getItem('authToken');
-    const savedUser = localStorage.getItem('authUser');
-    if (savedToken && savedUser) {
-      try {
+    try {
+      const savedToken = localStorage.getItem('authToken');
+      const savedUser = localStorage.getItem('authUser');
+      if (savedToken?.trim() && savedUser) {
+        const parsedUser: unknown = JSON.parse(savedUser);
+        if (!isStoredUser(parsedUser)) throw new Error('Invalid stored user');
+        // Restore both values only after parsing and checking the entire session.
         // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring session state from localStorage on mount, see comment above
         setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-      } catch {
-        // Clear invalid stored data
+        setUser(parsedUser);
+      } else if (savedToken !== null || savedUser !== null) {
         localStorage.removeItem('authToken');
         localStorage.removeItem('authUser');
       }
+    } catch {
+      // Storage can also be unavailable (for example, browser privacy settings).
+      // Cleanup is best effort; either failure must leave the app signed out.
+      for (const key of ['authToken', 'authUser']) {
+        try {
+          localStorage.removeItem(key);
+        } catch { /* Storage access is blocked. */ }
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   // Every sign-in method (wallet, Twitter, magic link) ends the same way:

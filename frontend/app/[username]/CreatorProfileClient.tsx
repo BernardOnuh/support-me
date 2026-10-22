@@ -42,7 +42,7 @@ interface Creator {
   id: number;
   username: string;
   displayName: string | null;
-  walletAddress: string;
+  walletAddress: string | null;
   bio: string | null;
   avatarUrl: string | null;
   socialLinks: Record<string, string> | null;
@@ -840,7 +840,11 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
             </span>
           </div>
 
-          {sending ? (
+          {!creator.walletAddress ? (
+            <p role="status" className="text-sm text-muted font-medium">
+              {t('payoutUnavailable')}
+            </p>
+          ) : sending ? (
             <div className="py-2">
               <TipJarLoader fullScreen={false} />
               {(subscribeStep || (txStatus && statusLabels[txStatus])) && (

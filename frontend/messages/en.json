@@ -30,6 +30,7 @@
     "testnetBadge": "Testnet",
     "testnetTooltip": "This app runs on Stellar Testnet — no real funds are used.",
     "connectWallet": "Connect Wallet",
+    "payoutUnavailable": "This creator is not accepting tips yet because they have not connected a payout wallet. Please check back later.",
     "connecting": "Connecting…",
     "walletConnected": "Wallet connected!",
     "walletLabel": "Wallet: {address}…",
