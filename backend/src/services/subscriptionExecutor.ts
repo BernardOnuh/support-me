@@ -88,7 +88,7 @@ function errorCauseMessage(error: unknown): string {
 export class SubscriptionExecutor {
   private keypair: Keypair | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
+  public running = false;
 
   start(): void {
     const donationContractId = getDonationContractId();
@@ -397,7 +397,7 @@ export class SubscriptionExecutor {
 
   private async recordFailure(subscription: Subscription, message: string): Promise<void> {
     const isPermanent = message.includes("failed on-chain") || message.includes("reverted");
-    const failureCount = subscription.failureCount + 1;
+    const failureCount = (subscription.failureCount ?? 0) + 1;
     const maxAttempts = isPermanent ? 3 : 24; // bounded attempts
     const shouldDeactivate = failureCount >= maxAttempts;
 

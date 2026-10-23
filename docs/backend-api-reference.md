@@ -381,7 +381,22 @@ Get a creator by username.
 
 ### POST /api/creators/:username/create
 
-Create a creator profile after first wallet sign-in.
+Create a creator profile after sign-in (wallet, Twitter, or magic link).
+
+`walletAddress` defaults to the authenticated user's wallet, or `null` if none
+is connected. Legacy empty strings are normalized to `null`. Walletless
+profiles remain available by username, but are excluded from Discover/search
+and creator leaderboards until a payout wallet is connected.
+
+On both creation and update, `avatarUrl` must use HTTPS on
+`res.cloudinary.com/<CLOUDINARY_CLOUD_NAME>/...`, matching the backend's
+configured cloud name. Avatar writes are rejected if that setting is absent.
+Social-link updates accept only the keys `twitter`, `instagram`, `youtube`,
+`tiktok`, `github`, `linkedin`, `telegram`, and `website`, with absolute HTTP(S)
+URLs or platform handles (LinkedIn: `in/username`; website: full URL required).
+Handles are stored as expanded platform URLs. Invalid hosts/schemes or unknown
+keys return HTTP 400 with `VALIDATION_ERROR`. An empty social-links object
+clears all links.
 
 **Auth Required:** Yes
 
@@ -541,6 +556,11 @@ Record a donation (requires `Idempotency-Key` header).
 }
 ```
 
+`creatorUsername`, `senderAddress`, `amount` and `transactionHash` are
+required; omitting `transactionHash` returns `400 VALIDATION_ERROR`. A report
+without a transaction hash cannot be corroborated on-chain, so the API rejects
+it rather than recording an unverifiable donation (issue #258).
+
 **Response:**
 ```json
 {
@@ -561,8 +581,11 @@ Record a donation (requires `Idempotency-Key` header).
 
 **Notes:**
 - Idempotent on `Idempotency-Key` header
-- When `transactionHash` is provided, uses upsert based on on-chain identity
-- Browser-reported rows are provisional until verified by the event listener
+- `transactionHash` is required; the report is upserted on its on-chain identity
+- Client-reported rows are always stored `verified: false` — only server-side
+  verification (the event listener / subscription executor) can set
+  `verified: true`, and unverified rows are excluded from the verified-only
+  feed (`GET /api/donations`)
 - Triggers email notifications to both creator and supporter
 
 ---

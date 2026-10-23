@@ -7,7 +7,7 @@ import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { notify } from '@/lib/notify';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { PartyIcon, TwitterIcon, LinkIcon } from '@hugeicons/core-free-icons';
-import { connectWallet, isWalletOnTestnet } from '@/lib/wallet';
+import { connectWallet, addTrustline } from '@/lib/wallet';
 import {
   categorizeWalletError,
   WALLET_INSTALL_LINKS,
@@ -19,10 +19,15 @@ import {
   approveAllowance,
   subscribe,
   MAX_CHARGE_INTERVAL_DAYS,
+  fundWithFriendbot,
 } from '@/lib/contract';
 import { availableAssetCodes, getAsset, type AssetCode } from '@/lib/assets';
-import { getPlatform } from '@/lib/socials';
+import { MIN_DONATION_AMOUNT } from '@/lib/donation';
+import { memoByteLength } from '@/lib/memo';
+import { getPlatform, isHttpUrl } from '@/lib/socials';
+import { explorerTxUrl, horizonServer } from '@/lib/stellarNetwork';
 import { API_URL } from '@/lib/api';
+import { fetchWithRetry } from '@/lib/network';
 import { describeDonationFailure, type FlowFailure } from '@/lib/failures';
 import { useAuth } from '@/context/AuthContext';
 import { Skeleton } from '@/components/Skeleton';
@@ -32,14 +37,12 @@ import { getMessages, useDocumentLang, useLocalePreference, type Locale } from '
 import { THEME_LAYOUTS, themeStyle, type ProfileTheme } from '@/lib/theme';
 
 
-const HORIZON_URL = 'https://horizon-testnet.stellar.org';
-const server = new StellarSdk.Horizon.Server(HORIZON_URL);
 
 interface Creator {
   id: number;
   username: string;
   displayName: string | null;
-  walletAddress: string;
+  walletAddress: string | null;
   bio: string | null;
   avatarUrl: string | null;
   socialLinks: Record<string, string> | null;
@@ -57,7 +60,9 @@ interface Creator {
 // Fallback quick-select amounts shown on the donate page when a creator
 // hasn't configured their own presets from Settings.
 const DEFAULT_DONATION_PRESETS = ['1', '5', '10', '20'];
-export const MIN_DONATION_AMOUNT = 0.1;
+// Re-exported for existing importers; defined in lib/donation.ts so Settings
+// and the donate page enforce the same minimum (#244).
+export { MIN_DONATION_AMOUNT };
 export const LARGE_DONATION_THRESHOLD = 1000;
 
 interface Goal {
@@ -127,13 +132,16 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'paused'>('connecting');
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  // The connected wallet reports a network other than Testnet; the donate
-  // form is replaced with a blocking notice until it's switched.
-  const [wrongNetwork, setWrongNetwork] = useState(false);
+  // A non-404 failure (5xx, 429, dropped connection): the profile may well
+  // exist, so show a retryable error rather than "creator not found".
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const [userAddress, setUserAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [isUnfunded, setIsUnfunded] = useState(false);
+  const [funding, setFunding] = useState(false);
+  const [missingTrustline, setMissingTrustline] = useState(false);
 
   const [donationAmount, setDonationAmount] = useState('5');
   const [donationMessage, setDonationMessage] = useState('');
@@ -201,22 +209,37 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
     }
   }, [username]);
 
-  useEffect(() => {
-    const fetchCreator = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/creators/${username}`);
-        if (!res.ok) throw new Error('Creator not found');
-        const data: Creator = await res.json();
-        setCreator(data);
-        await fetchGoals();
-      } catch {
+  const fetchCreator = useCallback(async () => {
+    setLoading(true);
+    setNotFound(false);
+    setLoadFailed(false);
+    try {
+      const res = await fetchWithRetry(
+        `${API_URL}/api/creators/${encodeURIComponent(username)}`
+      );
+      if (res.status === 404) {
         setNotFound(true);
-      } finally {
-        setLoading(false);
+        return;
       }
-    };
-    fetchCreator();
+      if (!res.ok) {
+        setLoadFailed(true);
+        return;
+      }
+      const data: Creator = await res.json();
+      setCreator(data);
+      await fetchGoals();
+    } catch {
+      // fetchWithRetry already surfaced the connection failure (toast +
+      // offline banner); show the retryable error state too.
+      setLoadFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, [username, fetchGoals]);
+
+  useEffect(() => {
+    fetchCreator();
+  }, [fetchCreator]);
 
   // Default the selected asset to the first one the creator accepts, once the
   // profile loads.
@@ -300,24 +323,33 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
   // back to null when the wallet holds no trustline/balance for it.
   const loadAssetBalance = useCallback(async (address: string, code: string) => {
     try {
-      const account = await server.loadAccount(address);
+      const account = await horizonServer.loadAccount(address);
+      setIsUnfunded(false);
       const asset = getAsset(code);
       let match;
       if (code === 'XLM') {
         match = account.balances.find(
           (b: { asset_type?: string }) => b.asset_type === 'native'
         );
+        setMissingTrustline(false);
       } else {
         match = account.balances.find((b: { asset_type?: string; asset_code?: string }) => {
           if (b.asset_type === 'native') return false;
           if (asset && asset.code === code && typeof asset.balanceMatcher === 'function') {
-            return asset.balanceMatcher(b);
+            return asset.balanceMatcher(b as StellarSdk.Horizon.HorizonApi.BalanceLine);
           }
           return b.asset_code === code;
         });
+        // For non-XLM assets, missing match means no trustline
+        setMissingTrustline(!match);
       }
       return parseFloat((match as { balance?: string })?.balance || '0').toFixed(4);
-    } catch {
+    } catch (err) {
+      // Detect 404 / not found errors which indicate an unfunded account
+      const message = (err as Error)?.message || '';
+      if (/not found|404|account does not exist/i.test(message)) {
+        setIsUnfunded(true);
+      }
       return null;
     }
   }, []);
@@ -395,12 +427,31 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
     }
   };
 
-  // Shown on the "Check again" button of the wrong-network notice: if the
-  // wallet has been switched to Testnet, clear the notice and refresh the
-  // balance the form will show.
-  const handleRecheckNetwork = async () => {
-    if (await ensureTestnetWallet()) {
-      if (userAddress) setBalance(await loadAssetBalance(userAddress, assetCode));
+  const handleFundWithFriendbot = async () => {
+    if (!userAddress) return;
+    setFunding(true);
+    try {
+      await fundWithFriendbot(userAddress);
+      notify.success('Wallet funded successfully!');
+      setBalance(await loadAssetBalance(userAddress, assetCode));
+    } catch (err) {
+      notify.error('Failed to fund wallet', (err as Error).message);
+    } finally {
+      setFunding(false);
+    }
+  };
+
+  const handleAddTrustline = async () => {
+    if (!userAddress || assetCode === 'XLM') return;
+    setFunding(true);
+    try {
+      await addTrustline(assetCode, userAddress);
+      notify.success(`Trustline for ${assetCode} added successfully!`);
+      setBalance(await loadAssetBalance(userAddress, assetCode));
+    } catch (err) {
+      notify.error('Failed to add trustline', (err as Error).message);
+    } finally {
+      setFunding(false);
     }
   };
 
@@ -441,13 +492,14 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
       });
 
       setBalance(await loadAssetBalance(userAddress, assetCode));
-      // The record call (if it succeeded) already applied this donation to
-      // any matching active goals server-side — pick up the new totals.
+      // A hash-bearing report is only provisional: the backend's Soroban event
+      // listener verifies the event and applies it to matching active goals
+      // asynchronously, so goal totals may lag this response by a poll.
       if (recordRes.ok) await fetchGoals();
 
       const txLink = (
         <a
-          href={`https://stellar.expert/explorer/testnet/tx/${hash}`}
+          href={explorerTxUrl(hash)}
           target="_blank"
           rel="noopener noreferrer"
           className="underline"
@@ -609,6 +661,31 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
     );
   }
 
+  if (loadFailed) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
+        <div className="card-brutal p-10 text-center max-w-md" role="alert">
+          <h1 className="text-2xl font-extrabold text-ink mb-2">
+            {tProfile('loadFailed.title')}
+          </h1>
+          <p className="text-muted font-medium mb-6">
+            {tProfile.rich('loadFailed.description', {
+              username,
+              mono: (chunks) => <span className="font-mono">{chunks}</span>,
+            })}
+          </p>
+          <button
+            type="button"
+            onClick={() => fetchCreator()}
+            className="btn-brutal btn-brutal-primary"
+          >
+            {tProfile('loadFailed.retry')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (notFound || !creator) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center px-4">
@@ -626,7 +703,7 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
   }
 
   const socialLinks = creator.socialLinks || {};
-  const socialEntries = Object.entries(socialLinks).filter(([, url]) => url);
+  const socialEntries = Object.entries(socialLinks).filter(([, url]) => isHttpUrl(url));
 
   const displayName = creator.displayName || creator.username;
   const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://support-mee.vercel.app';
@@ -786,7 +863,11 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
             </span>
           </div>
 
-          {sending ? (
+          {!creator.walletAddress ? (
+            <p role="status" className="text-sm text-muted font-medium">
+              {t('payoutUnavailable')}
+            </p>
+          ) : sending ? (
             <div className="py-2">
               <TipJarLoader fullScreen={false} />
               {(subscribeStep || (txStatus && statusLabels[txStatus])) && (
@@ -822,8 +903,43 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
                   {t('walletLabel', { address: userAddress.slice(0, 8) })}
                 </p>
                 <p className="text-ink font-extrabold mt-1">
-                  {balance ?? '0.0000'} {assetCode}
+                  {isUnfunded ? 'Not funded on Testnet' : (balance ?? '0.0000')} {assetCode}
                 </p>
+                {isUnfunded && (
+                  <button
+                    onClick={handleFundWithFriendbot}
+                    disabled={funding}
+                    className="btn-brutal btn-brutal-primary w-full mt-2 text-xs py-1.5"
+                  >
+                    {funding ? 'Funding...' : 'Fund with Friendbot'}
+                  </button>
+                )}
+                {missingTrustline && !isUnfunded && assetCode !== 'XLM' && (
+                  <div className="mt-2 space-y-2">
+                    <p className="text-xs text-ink/70 font-medium">
+                      You need a {assetCode} trustline to hold or send this asset.
+                    </p>
+                    <button
+                      onClick={handleAddTrustline}
+                      disabled={funding}
+                      className="btn-brutal btn-brutal-primary w-full text-xs py-1.5"
+                    >
+                      {funding ? 'Adding...' : `Add ${assetCode} trustline`}
+                    </button>
+                    <p className="text-xs text-muted">
+                      Get test {assetCode} from{' '}
+                      <a
+                        href="https://faucet.circle.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        Circle&apos;s faucet
+                      </a>
+                      . Test tokens have no real value.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {assetCodes.length > 1 && (
@@ -858,7 +974,9 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
                 const parsedAmt = parseFloat(donationAmount);
                 const isAmountValid = Number.isFinite(parsedAmt) && parsedAmt >= MIN_DONATION_AMOUNT;
                 const isLargeDonation = Number.isFinite(parsedAmt) && parsedAmt >= LARGE_DONATION_THRESHOLD;
-                const canSubmit = isAmountValid && (!isLargeDonation || largeDonationConfirmed);
+                const memoBytes = memoByteLength(donationMessage);
+                const memoTooLong = memoBytes > MAX_MEMO_LENGTH;
+                const canSubmit = isAmountValid && (!isLargeDonation || largeDonationConfirmed) && !memoTooLong;
 
                 return (
                   <>
@@ -939,14 +1057,18 @@ function CreatorProfileView({ username, locale, onLocaleChange }: CreatorProfile
                         id="donation-message"
                         value={donationMessage}
                         onChange={(e) => setDonationMessage(e.target.value)}
-                        maxLength={MAX_MEMO_LENGTH}
                         placeholder={t('messagePlaceholder')}
                         className="input-brutal text-sm"
                         rows={3}
                       />
                       <p className="text-xs text-muted mt-1 font-medium">
-                        {t('characterCount', { count: donationMessage.length, max: MAX_MEMO_LENGTH })}
+                        {memoBytes}/{MAX_MEMO_LENGTH} bytes
                       </p>
+                      {memoTooLong && (
+                        <p role="alert" className="text-xs text-red-600 mt-1">
+                          Message must be {MAX_MEMO_LENGTH} bytes or fewer.
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between gap-3">

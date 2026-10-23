@@ -1,11 +1,11 @@
-import { StellarWalletsKit, Networks } from '@creit.tech/stellar-wallets-kit';
+import { StellarWalletsKit } from '@creit.tech/stellar-wallets-kit';
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
 import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
 import { AlbedoModule } from '@creit.tech/stellar-wallets-kit/modules/albedo';
 import { RabetModule } from '@creit.tech/stellar-wallets-kit/modules/rabet';
 import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
-
-const NETWORK_PASSPHRASE = Networks.TESTNET;
+import * as StellarSdk from '@stellar/stellar-sdk';
+import { NETWORK_PASSPHRASE, horizonServer } from './stellarNetwork';
 
 /**
  * Raised (before any signature is requested) when the connected wallet reports
@@ -196,6 +196,52 @@ export const signMessage = async (message: string, address: string): Promise<str
       networkPassphrase: NETWORK_PASSPHRASE,
     });
     return signedMessage;
+  } catch (err) {
+    throw toWalletError(err);
+  }
+};
+
+/**
+ * Adds a trustline for a given asset code (USDC/USDT) by building and signing
+ * a changeTrust operation. The asset issuer must be configured in env vars.
+ */
+export const addTrustline = async (assetCode: string, address: string): Promise<string> => {
+  if (typeof window !== 'undefined' && window.__SUPPORTME_MOCK_WALLET__?.signTransaction) {
+    // Mock implementation would go here
+    throw new Error('Mock trustline not implemented');
+  }
+
+  const { getAsset } = await import('./assets');
+  const asset = getAsset(assetCode);
+
+  if (!asset.issuer) {
+    throw new Error(`${assetCode} is not configured for this deployment.`);
+  }
+
+  ensureInit();
+
+  try {
+    // Load the account to get the current sequence number
+    const account = await horizonServer.loadAccount(address);
+
+    // Build the changeTrust operation
+    const assetObj = new StellarSdk.Asset(assetCode, asset.issuer);
+    const transaction = new StellarSdk.TransactionBuilder(account, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(StellarSdk.Operation.changeTrust({ asset: assetObj }))
+      .setTimeout(60)
+      .build();
+
+    // Sign the transaction
+    const { signedTxXdr } = await signTransaction(transaction.toXDR(), address);
+
+    // Submit the transaction
+    const signedTx = StellarSdk.TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE) as StellarSdk.Transaction;
+    const result = await horizonServer.submitTransaction(signedTx);
+
+    return result.hash;
   } catch (err) {
     throw toWalletError(err);
   }

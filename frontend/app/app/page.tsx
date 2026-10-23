@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import * as StellarSdk from '@stellar/stellar-sdk';
 import { notify } from '@/lib/notify';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
@@ -20,9 +19,9 @@ import { usePrices } from '@/lib/usePrices';
 import { formatUsd } from '@/lib/prices';
 import { availableAssetCodes, getAsset } from '@/lib/assets';
 import { ShareModal } from '@/components/ShareModal';
+import { fundWithFriendbot } from '@/lib/contract';
+import { horizonServer } from '@/lib/stellarNetwork';
 
-const HORIZON_URL = 'https://horizon-testnet.stellar.org';
-const server = new StellarSdk.Horizon.Server(HORIZON_URL);
 
 export const BALANCE_HIDDEN_STORAGE_KEY = 'balance_hidden';
 
@@ -41,6 +40,8 @@ export default function AppHubPage() {
   const [showUsd, setShowUsd] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [isUnfunded, setIsUnfunded] = useState(false);
+  const [funding, setFunding] = useState(false);
 
   // Load balance masking preference from localStorage (defaults to hidden = true)
   useEffect(() => {
@@ -81,14 +82,20 @@ export default function AppHubPage() {
     }
     setBalancesLoading(true);
     try {
-      const account = await server.loadAccount(walletAddress);
+      const account = await horizonServer.loadAccount(walletAddress);
+      setIsUnfunded(false);
       const next: Balances = {};
       for (const code of assetCodes) {
         const match = account.balances.find(getAsset(code).balanceMatcher);
         next[code] = match ? String(Math.round(parseFloat((match as { balance?: string }).balance || '0'))) : null;
       }
       setBalances(next);
-    } catch {
+    } catch (err) {
+      // Detect 404 / not found errors which indicate an unfunded account
+      const message = (err as Error)?.message || '';
+      if (/not found|404|account does not exist/i.test(message)) {
+        setIsUnfunded(true);
+      }
       // No account yet (unfunded) or network hiccup: leave balances empty so
       // the UI shows dashes rather than a misleading zero.
       setBalances({});
@@ -138,6 +145,20 @@ export default function AppHubPage() {
   // Open the share choice modal (Copy link, QR code, both, or native share)
   const shareProfile = () => {
     setShowShareModal(true);
+  };
+
+  const handleFundWithFriendbot = async () => {
+    if (!walletAddress) return;
+    setFunding(true);
+    try {
+      await fundWithFriendbot(walletAddress);
+      notify.success('Wallet funded successfully!');
+      await loadBalances();
+    } catch (err) {
+      notify.error('Failed to fund wallet', (err as Error).message);
+    } finally {
+      setFunding(false);
+    }
   };
 
   const greetingName = creator?.displayName || creator?.username || 'there';
@@ -200,7 +221,7 @@ export default function AppHubPage() {
                   return (
                     <div key={code} className="flex items-baseline gap-3">
                       <span className="text-2xl sm:text-3xl font-extrabold text-ink tabular-nums">
-                        {bal != null ? Number(bal).toLocaleString() : '—'}
+                        {isUnfunded ? 'Not funded' : (bal != null ? Number(bal).toLocaleString() : '—')}
                       </span>
                       <span className="text-base font-bold text-ink/70">{code}</span>
                       {usd && <span className="text-sm font-bold text-ink/60">{usd}</span>}
@@ -208,6 +229,15 @@ export default function AppHubPage() {
                   );
                 })}
               </div>
+            )}
+            {isUnfunded && !hidden && (
+              <button
+                onClick={handleFundWithFriendbot}
+                disabled={funding}
+                className="btn-brutal btn-brutal-primary w-full mt-3 text-xs py-1.5"
+              >
+                {funding ? 'Funding...' : 'Fund with Friendbot'}
+              </button>
             )}
           </div>
 
