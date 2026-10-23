@@ -29,3 +29,4 @@ skills-lock.json
 # Sentry scaffolded examples
 frontend/app/api/sentry-example-api/
 frontend/app/sentry-example-page/
+config.bat

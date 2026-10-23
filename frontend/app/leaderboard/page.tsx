@@ -16,8 +16,10 @@ import {
 import { Skeleton } from '@/components/Skeleton';
 import { WalletMenu } from '@/components/WalletMenu';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { TestnetBadge } from '@/components/TestnetBadge';
 import { useAuth } from '@/context/AuthContext';
 import { API_URL } from '@/lib/api';
+import { explorerAccountUrl } from '@/lib/stellarNetwork';
 
 export type LeaderboardType = 'creators' | 'supporters';
 export type CurrencyFilter = 'XLM' | 'USDC' | 'EURC';
@@ -119,9 +121,12 @@ export default function LeaderboardPage() {
         className="sticky w-full z-50 bg-background border-b-4 border-ink"
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center gap-4">
-          <Link href="/" className="text-xl sm:text-2xl font-extrabold text-ink shrink-0 tracking-tight font-display">
-            SupportMe
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/" className="text-xl sm:text-2xl font-extrabold text-ink shrink-0 tracking-tight font-display">
+              SupportMe
+            </Link>
+            <TestnetBadge />
+          </div>
           <div className="hidden sm:flex items-center gap-6">
             <Link href="/discover" className="font-bold text-ink hover:text-primary transition">
               Discover
@@ -405,7 +410,7 @@ export default function LeaderboardPage() {
                             </Link>
                           ) : (
                             <a
-                              href={`https://stellar.expert/explorer/testnet/account/${entry.senderAddress}`}
+                              href={explorerAccountUrl(entry.senderAddress)}
                               target="_blank"
                               rel="noopener noreferrer"
                               aria-label={`View explorer details for ${sliceAddress(entry.senderAddress)}`}

@@ -4,20 +4,22 @@
   "private": true,
   "main": "dist/server.js",
   "engines": {
-    "node": ">=20",
+    "node": ">=24",
     "npm": ">=10"
   },
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "prisma generate && tsc",
-    "start": "node dist/server.js",
+    "dev": "node init && ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "node init && prisma generate && tsc",
+    "start": "node init && node dist/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "test": "jest",
+    "test:integration": "node test-integration.mjs",
     "lint": "eslint .",
-    "prisma:seed": "ts-node --transpile-only prisma/seed.ts"
+    "prisma:seed": "ts-node --transpile-only prisma/seed.ts",
+    "test:testnet": "ts-node-dev --transpile-only ../testnet-integration/runner.ts"
   },
   "prisma": {
     "seed": "ts-node --transpile-only prisma/seed.ts"

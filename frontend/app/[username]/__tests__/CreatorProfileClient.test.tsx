@@ -222,6 +222,17 @@ describe('CreatorProfileClient', () => {
     vi.clearAllMocks();
   });
 
+  it('explains why tips are unavailable before asking the supporter to connect', async () => {
+    mockFetchSequence({
+      '/api/creators/alice': { ...baseCreator, walletAddress: null },
+      '/api/goals/alice': { items: [] },
+    });
+    await renderProfile('alice');
+    await waitFor(() => expect(screen.getByText(/not accepting tips yet/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Connect Wallet' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send Donation' })).not.toBeInTheDocument();
+  });
+
   it('renders a progress bar for every active goal, using server-computed totals', async () => {
     mockFetchSequence({
       '/api/creators/alice': baseCreator,
@@ -647,74 +658,94 @@ describe('CreatorProfileClient', () => {
     });
   });
 
-  describe('wrong-network notice (#255)', () => {
-    const DONOR = 'GDONORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+  describe('profile load errors', () => {
+    function mockFetchResponses(
+      responder: (url: string, init?: RequestInit) => Promise<Response> | Response
+    ) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => responder(url, init))
+      );
+    }
 
-    it('shows a blocking notice instead of the donate form when the wallet is on Mainnet', async () => {
-      mockFetchSequence({
-        '/api/creators/alice': baseCreator,
-        '/api/goals/alice': { items: [] },
-      });
-      mockConnectWallet.mockResolvedValue(DONOR);
-      mockIsWalletOnTestnet.mockResolvedValue(false);
+    const response = (status: number, body: unknown = {}) =>
+      ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+
+    it('shows the not-found screen only for a 404', async () => {
+      mockFetchResponses((url) =>
+        url.includes('/api/creators/') ? response(404) : response(200, { items: [] })
+      );
 
       await renderProfile('alice');
-      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
-
-      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
 
       await waitFor(() =>
-        expect(screen.getByRole('alert')).toHaveTextContent(/wrong network/i)
+        expect(screen.getByRole('heading', { name: /creator not found/i })).toBeInTheDocument()
       );
-      expect(screen.getByRole('button', { name: /check again/i })).toBeInTheDocument();
-      // The donate form stays hidden until the network is fixed.
-      expect(screen.queryByLabelText(/amount/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
     });
 
-    it('clears the notice on "Check again" once the wallet is on Testnet', async () => {
-      mockFetchSequence({
-        '/api/creators/alice': baseCreator,
-        '/api/goals/alice': { items: [] },
+    it('shows a retryable error instead of not-found for a 500', async () => {
+      let creatorCalls = 0;
+      mockFetchResponses((url) => {
+        if (url.includes('/api/creators/alice')) {
+          creatorCalls += 1;
+          return creatorCalls === 1
+            ? response(500)
+            : response(200, baseCreator);
+        }
+        return response(200, { items: [] });
       });
-      mockConnectWallet.mockResolvedValue(DONOR);
-      mockIsWalletOnTestnet.mockResolvedValue(false);
 
       await renderProfile('alice');
-      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
-      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
-      await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
-
-      mockIsWalletOnTestnet.mockResolvedValue(true);
-      await userEvent.click(screen.getByRole('button', { name: /check again/i }));
 
       await waitFor(() =>
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+        expect(screen.getByRole('alert')).toHaveTextContent(/something went wrong/i)
       );
-      expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /creator not found/i })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+      expect(creatorCalls).toBe(2);
     });
 
-    it('blocks a donation when the wallet switched to Mainnet after connecting', async () => {
-      mockFetchSequence({
-        '/api/creators/alice': baseCreator,
-        '/api/goals/alice': { items: [] },
+    it('shows a retryable error, not not-found, when the request fails on the network', async () => {
+      let creatorCalls = 0;
+      mockFetchResponses((url) => {
+        if (url.includes('/api/creators/alice')) {
+          creatorCalls += 1;
+          if (creatorCalls === 1) throw new TypeError('Failed to fetch');
+        }
+        if (url.includes('/api/goals/alice')) return response(200, { items: [goal()] });
+        return response(200, baseCreator);
       });
-      mockConnectWallet.mockResolvedValue(DONOR);
 
       await renderProfile('alice');
-      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
-      await userEvent.click(screen.getByRole('button', { name: /connect wallet/i }));
-      await waitFor(() => expect(screen.getByLabelText(/amount/i)).toBeInTheDocument());
-
-      mockIsWalletOnTestnet.mockResolvedValue(false);
-      await userEvent.click(screen.getByRole('button', { name: /send donation/i }));
 
       await waitFor(() =>
-        expect(screen.getByRole('alert')).toHaveTextContent(/wrong network/i)
+        expect(screen.getByRole('alert')).toHaveTextContent(/something went wrong/i)
       );
-      // No donation was recorded — the request never went out.
-      expect(
-        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/api/donations'))
-      ).toHaveLength(0);
+      expect(screen.queryByRole('heading', { name: /creator not found/i })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+      await waitFor(() => expect(screen.getByText('New microphone')).toBeInTheDocument());
+      expect(creatorCalls).toBe(2);
+    });
+
+    it('encodes the username in the creator request URL', async () => {
+      mockFetchResponses((url) => {
+        if (url.includes('/api/creators/')) return response(200, baseCreator);
+        return response(200, { items: [] });
+      });
+
+      await renderProfile('weird/name');
+
+      await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+      const creatorCall = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) => String(url).includes('/api/creators/'));
+      expect(String(creatorCall?.[0])).toContain('/api/creators/weird%2Fname');
     });
   });
 

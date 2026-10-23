@@ -4,6 +4,11 @@
       "title": "Creator not found",
       "description": "No profile exists for <mono>@{username}</mono>."
     },
+    "loadFailed": {
+      "title": "Something went wrong",
+      "description": "We couldn't load the profile for <mono>@{username}</mono>. It may be a temporary problem — please try again.",
+      "retry": "Try again"
+    },
     "share": {
       "tweetText": "Support {name} (@{username}) on SupportMe!",
       "shareButton": "Share",
@@ -25,6 +30,7 @@
     "testnetBadge": "Testnet",
     "testnetTooltip": "This app runs on Stellar Testnet — no real funds are used.",
     "connectWallet": "Connect Wallet",
+    "payoutUnavailable": "This creator is not accepting tips yet because they have not connected a payout wallet. Please check back later.",
     "connecting": "Connecting…",
     "walletConnected": "Wallet connected!",
     "walletLabel": "Wallet: {address}…",
@@ -79,6 +85,6 @@
   },
   "languageSwitcher": {
     "label": "Language",
-    "scopeNote": "Translates this profile and the donation form only. Other pages stay in English."
+    "scopeNote": "Translates this profile and the donation form. Other pages are currently in English."
   }
 }
